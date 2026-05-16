@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Tramear isométrico</name>
+    <id>com.tramear.isometrico.detectar_costuras</id>
+
+    <param name="tab" type="notebook">
+        <page name="deteccion" gui-text="Detección de costuras">
+            <label appearance="header">Rango de tamaño de los marcadores de costura</label>
+            <param name="radio_min" type="float" precision="2" min="0.05" max="50.0"
+                   gui-text="Radio mínimo (unidades del dibujo):">1.40</param>
+            <param name="radio_max" type="float" precision="2" min="0.05" max="50.0"
+                   gui-text="Radio máximo (unidades del dibujo):">2.50</param>
+
+            <label appearance="header">Asociación con tubería</label>
+            <param name="tolerancia_linea" type="float" precision="2" min="0.0" max="20.0"
+                   gui-text="Distancia máxima al eje de tubería:">1.50</param>
+            <param name="solo_sobre_linea" type="bool"
+                   gui-text="Descartar círculos que no estén sobre una línea">true</param>
+
+            <label appearance="header">Falsos positivos</label>
+            <param name="filtrar_puntas_flecha" type="bool"
+                   gui-text="Filtrar puntas de flecha de cota/soportación">true</param>
+
+            <label appearance="header">Modo</label>
+            <param name="modo" type="optiongroup" appearance="combo" gui-text="Modo de detección:">
+                <option value="auto">Automático (vectorial + raster)</option>
+                <option value="vectorial">Solo vectorial</option>
+                <option value="raster">Solo raster (OpenCV)</option>
+            </param>
+        </page>
+
+        <page name="marcado" gui-text="Marcado y numeración">
+            <label appearance="header">Colores</label>
+            <param name="color_marca" type="color"
+                   gui-text="Color costura soldada (W):">0x0066ccff</param>
+            <param name="color_tubing" type="color"
+                   gui-text="Color costura tubing (T):">0x9b1f2aff</param>
+
+            <label appearance="header">Callout (círculo con el número)</label>
+            <param name="radio_callout" type="float" precision="1" min="2.0" max="50.0"
+                   gui-text="Radio del callout:">10.4</param>
+            <param name="offset_callout" type="float" precision="1" min="5.0" max="200.0"
+                   gui-text="Separación inicial del callout:">43.4</param>
+            <param name="distancia_max_callout" type="float" precision="1" min="20.0" max="500.0"
+                   gui-text="Distancia máxima del callout a la costura:">231.4</param>
+            <param name="tamano_etiqueta" type="float" precision="1" min="1.0" max="50.0"
+                   gui-text="Tamaño del texto del número (px):">8.0</param>
+
+            <label appearance="header">Numeración</label>
+            <param name="prefijo" type="string"
+                   gui-text="Prefijo soldadas (ej. W-):">W-</param>
+            <param name="prefijo_tubing" type="string"
+                   gui-text="Prefijo tubing (ej. T-):">T-</param>
+            <param name="numero_inicial" type="int" min="1" max="99999"
+                   gui-text="Número inicial:">1</param>
+        </page>
+
+        <page name="exportar" gui-text="Welding book">
+            <param name="exportar_csv" type="bool" gui-text="Exportar CSV">true</param>
+            <param name="exportar_xlsx" type="bool" gui-text="Exportar XLSX (si openpyxl está instalado)">true</param>
+            <param name="ruta_export" type="path" mode="folder"
+                   gui-text="Carpeta de exportación (vacío = junto al SVG):"></param>
+        </page>
+
+        <page name="info" gui-text="Ayuda">
+            <label xml:space="preserve">Trameado de isométricos de tubería.
+
+1. Abre el isométrico en Inkscape (PDF se importa con Archivo &gt; Abrir).
+2. Ajusta los rangos de radio para que coincidan con los círculos
+   que marcan costuras en tu plano.
+3. Ejecuta esta extensión: se marcarán y numerarán todas las costuras
+   detectadas y se generará el welding book en la carpeta indicada.
+
+Si tu plano es un PDF escaneado (imagen embebida), elige modo
+"Automático" o "Solo raster" — se usará OpenCV para detectar
+los círculos en la imagen.
+</label>
+        </page>
+    </param>
+
+    <effect needs-live-preview="false">
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Tramear isométrico"/>
+        </effects-menu>
+    </effect>
+
+    <script>
+        <command location="inx" interpreter="python">tramear_isometrico.py</command>
+    </script>
+</inkscape-extension>

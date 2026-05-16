@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+revision_10pdfs/fase_c_*
+revision_10pdfs/*_optcall.svg
+diagnostico_fases/
