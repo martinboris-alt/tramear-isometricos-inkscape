@@ -121,73 +121,79 @@ def asignar_costuras_a_edges(costuras: Sequence[Costura],
 
 def nodo_entrada(flechas: Sequence[FlechaFlujo],
                   nodos: list[tuple[float, float]],
-                  componente: set[int] | None = None) -> int | None:
-    """Devuelve el nodo de la componente más cercano a una flecha de flujo.
+                  componente: set[int] | None = None,
+                  adj=None) -> int | None:
+    """Devuelve el nodo de entrada del flujo.
 
-    Si la flecha apunta DESDE un endpoint del segmento (es decir, la flecha
-    está más allá del extremo en la dirección del flujo), el nodo de entrada
-    es el OPUESTO al endpoint de la flecha (es el extremo más "aguas arriba"
-    del segmento que contiene la flecha).
+    Si hay flechas: busca el nodo de la componente más aguas arriba
+    (máxima proyección sobre el vector opuesto al flujo).
+
+    Si no hay flechas: heurística — entre los extremos de la red (grado 1),
+    elige el más arriba-a-la-izquierda (mínimo x + y). En isométricos
+    de tubería sin flecha de flujo, el extremo superior-izquierdo suele
+    ser el punto de inicio natural del flujo.
     """
-    if not flechas or not nodos:
-        return None
-    # Por simplicidad: para cada flecha, encontrar el endpoint más cercano
-    # (es el extremo del segmento adyacente a la flecha = SALIDA del flujo).
-    # El nodo de ENTRADA es el OPUESTO de ese endpoint en el mismo segmento.
-    # Aquí simplificamos: tomamos como entrada el endpoint MÁS LEJANO de la
-    # flecha entre TODOS los nodos de la componente, en la dirección opuesta
-    # al flujo. El que MAXIMIZA proyección sobre (-dx, -dy) es la entrada.
-    f = flechas[0]
     pool = ([n for n in range(len(nodos)) if n in componente]
             if componente else list(range(len(nodos))))
-    if not pool:
+    if not pool or not nodos:
         return None
-    # Proyección sobre vector OPUESTO al flujo (la entrada está aguas arriba)
-    def proy(n):
-        x, y = nodos[n]
-        return x * (-f.dx) + y * (-f.dy)
-    return max(pool, key=proy)
+
+    if flechas:
+        f = flechas[0]
+        def proy(n):
+            x, y = nodos[n]
+            return x * (-f.dx) + y * (-f.dy)
+        return max(pool, key=proy)
+
+    # Sin flecha: preferir extremos (grado 1) sobre nodos interiores.
+    if adj is not None:
+        extremos = [n for n in pool if len(adj[n]) == 1]
+        candidatos = extremos if extremos else pool
+    else:
+        candidatos = pool
+    # Mínimo x + y = más arriba-a-la-izquierda en pantalla
+    return min(candidatos, key=lambda n: nodos[n][0] + nodos[n][1])
+
+
+def _tamanio_rama(edge_idx: int, desde_nodo: int,
+                   ya_visit: set[int], adj, edges: list[Edge]) -> int:
+    """Cuenta edges alcanzables por BFS desde `edge_idx` sin reentrar
+    a `ya_visit`. O(n) — no recursivo, no copia el set en cada paso."""
+    cola = [(edge_idx, desde_nodo)]
+    contados: set[int] = set()
+    while cola:
+        ei, dn = cola.pop()
+        if ei in ya_visit or ei in contados:
+            continue
+        contados.add(ei)
+        e = edges[ei]
+        sig = e.n2 if e.n1 == dn else e.n1
+        for _, ei2 in adj[sig]:
+            if ei2 not in ya_visit and ei2 not in contados:
+                cola.append((ei2, sig))
+    return len(contados)
 
 
 def dfs_topologico(nodo_inicial: int, adj, edges: list[Edge]
                     ) -> list[Costura]:
-    """DFS desde `nodo_inicial`. En cada nodo, prioriza el edge cuya
-    rama termine antes (más corta hasta llegar a un extremo grado-1).
+    """DFS desde `nodo_inicial`. En cada bifurcación, prioriza la rama
+    con MENOS edges alcanzables (rama más corta primero).
 
     Devuelve costuras en orden de visita.
     """
     visitados_edges: set[int] = set()
     orden: list[Costura] = []
+    pila = [(ei, nodo_inicial) for _, ei in adj[nodo_inicial]]
 
-    def longitud_rama_desde(edge_idx: int, desde_nodo: int,
-                             ya_visit: set[int]) -> float:
-        """Estima la longitud total de la rama que arranca por `edge_idx`
-        desde `desde_nodo`, sin reentrar a `ya_visit`.
+    # Pre-ordenar la pila inicial por tamaño de rama ascendente
+    pila.sort(key=lambda x: _tamanio_rama(x[0], x[1], visitados_edges, adj, edges))
 
-        Útil para decidir en una tee cuál rama es más corta. Cuenta la
-        longitud acumulada del DFS sobre esa subrama.
-        """
-        local_visit = set(ya_visit)
-        local_visit.add(edge_idx)
-        e = edges[edge_idx]
-        siguiente = e.n2 if e.n1 == desde_nodo else e.n1
-        total = e.longitud
-        # Sumar longitudes de los siguientes edges, recursivamente, ELIGIENDO
-        # SIEMPRE la subrama más corta primero (aproximación)
-        siguientes = [ei for nbr, ei in adj[siguiente]
-                       if ei not in local_visit]
-        for ei in siguientes:
-            total += longitud_rama_desde(ei, siguiente, local_visit)
-        return total
-
-    def visitar_edge(edge_idx: int, desde_nodo: int):
+    while pila:
+        edge_idx, desde_nodo = pila.pop(0)
         if edge_idx in visitados_edges:
-            return
+            continue
         visitados_edges.add(edge_idx)
         e = edges[edge_idx]
-        # Ordenar costuras del edge según dirección de recorrido (desde
-        # desde_nodo). Si entramos por n1, t va creciendo; si por n2,
-        # decreciendo.
         if desde_nodo == e.n1:
             costuras_orden = sorted(e.costuras, key=lambda tc: tc[0])
         else:
@@ -195,22 +201,12 @@ def dfs_topologico(nodo_inicial: int, adj, edges: list[Edge]
         for _, c in costuras_orden:
             orden.append(c)
         siguiente = e.n2 if e.n1 == desde_nodo else e.n1
-        # Edges salientes del siguiente nodo
-        salientes = [ei for nbr, ei in adj[siguiente]
-                      if ei not in visitados_edges]
-        # Ordenar por longitud de rama ASCENDENTE (rama más corta primero)
-        salientes.sort(key=lambda ei: longitud_rama_desde(
-            ei, siguiente, visitados_edges))
-        for ei in salientes:
-            visitar_edge(ei, siguiente)
-
-    # Empezar por todos los edges adyacentes al nodo inicial, en orden
-    # de rama más corta primero
-    salientes_iniciales = [ei for _, ei in adj[nodo_inicial]]
-    salientes_iniciales.sort(key=lambda ei: longitud_rama_desde(
-        ei, nodo_inicial, set()))
-    for ei in salientes_iniciales:
-        visitar_edge(ei, nodo_inicial)
+        salientes = [(ei, siguiente) for _, ei in adj[siguiente]
+                     if ei not in visitados_edges]
+        salientes.sort(key=lambda x: _tamanio_rama(
+            x[0], x[1], visitados_edges, adj, edges))
+        # Insertar al frente para mantener DFS (ramas cortas primero)
+        pila = salientes + pila
 
     return orden
 
@@ -245,18 +241,49 @@ def numerar_por_proximidad(costuras: Sequence[Costura],
     inicio = min(range(len(costuras)),
                   key=lambda i: costuras[i].x * f.dx + costuras[i].y * f.dy)
 
-    # 1. Greedy puro tipo TSP: empezar en `inicio`, siempre ir a la
-    #    costura no visitada más cercana.
+    # 1. Greedy con momentum: entre candidatos dentro de 1.5× d_min,
+    #    prefiere el que continúa en la misma dirección de avance.
+    #    Resuelve el caso donde dos costuras están casi equidistantes
+    #    pero solo una sigue el tramo principal de la tubería.
     visitados: set[int] = {inicio}
     orden: list[int] = [inicio]
     actual = inicio
+    prev = None  # nodo anterior (para calcular dirección de avance)
     while len(visitados) < len(costuras):
         candidatos = [(hypot(costuras[actual].x - costuras[j].x,
                               costuras[actual].y - costuras[j].y), j)
                        for j in range(len(costuras)) if j not in visitados]
-        d_min, siguiente = min(candidatos)
+        d_min, _ = min(candidatos)
+        # Umbral: candidatos a ≤ 1.5× d_min compiten con momentum
+        TOL_MOM = 1.5
+        cercanos = [(d, j) for d, j in candidatos if d <= TOL_MOM * d_min]
+        if len(cercanos) > 1 and prev is not None:
+            # Vector de avance (prev → actual)
+            pa = costuras[prev]
+            ca = costuras[actual]
+            adv_x = ca.x - pa.x
+            adv_y = ca.y - pa.y
+            adv_len = hypot(adv_x, adv_y) or 1.0
+            adv_x /= adv_len
+            adv_y /= adv_len
+            # Elegir candidato con mayor alineación con avance
+            def _score(dj):
+                d, j = dj
+                cj = costuras[j]
+                dx = cj.x - ca.x
+                dy = cj.y - ca.y
+                n = hypot(dx, dy) or 1.0
+                dot = (dx / n) * adv_x + (dy / n) * adv_y
+                # Multiplicar distancia por (1 - k·dot): premia fuertemente
+                # candidatos alineados con el tramo previo (k=0.6 hace que
+                # hasta un 50% más de distancia se compense si dot≈1).
+                return d * (1.0 - 0.6 * dot)
+            _, siguiente = min(cercanos, key=_score)
+        else:
+            _, siguiente = min(candidatos)
         orden.append(siguiente)
         visitados.add(siguiente)
+        prev = actual
         actual = siguiente
 
     # 2. Detectar saltos anómalos: la transición orden[i-1]→orden[i] cuya
@@ -360,7 +387,7 @@ def numerar_por_grafo(costuras: Sequence[Costura],
                        flechas: Sequence[FlechaFlujo],
                        numero_inicial: int = 1,
                        long_min_segmento: float = 10.0,
-                       tol_nodo: float = 2.5
+                       tol_nodo: float = 8.0
                        ) -> list[tuple[int, Costura]]:
     """Numera costuras siguiendo el grafo topológico de la tubería.
 
@@ -371,22 +398,29 @@ def numerar_por_grafo(costuras: Sequence[Costura],
 
     Si falla (sin flechas, sin componente, etc.), devuelve [].
     """
-    if not costuras or not flechas:
+    if not costuras:
         return []
     nodos, edges, adj = construir_grafo(
         segmentos, long_min=long_min_segmento, tol_nodo=tol_nodo)
     if not edges:
         return []
-    # Nodo más cercano a la flecha (es la SALIDA del flujo en ese segmento)
-    f = flechas[0]
-    nodo_cerca_flecha = min(range(len(nodos)),
-                             key=lambda n: hypot(nodos[n][0] - f.cx,
-                                                  nodos[n][1] - f.cy))
-    componente = componente_conexa(nodo_cerca_flecha, adj)
+    # Componente principal: si hay flecha usarla para anclar; si no,
+    # usar el nodo del grafo más cercano a la costura más top-left.
+    if flechas:
+        f = flechas[0]
+        nodo_ancla = min(range(len(nodos)),
+                         key=lambda n: hypot(nodos[n][0] - f.cx,
+                                             nodos[n][1] - f.cy))
+    else:
+        c0 = min(costuras, key=lambda c: c.x + c.y)
+        nodo_ancla = min(range(len(nodos)),
+                         key=lambda n: hypot(nodos[n][0] - c0.x,
+                                             nodos[n][1] - c0.y))
+    componente = componente_conexa(nodo_ancla, adj)
     if not componente:
         return []
     asignar_costuras_a_edges(costuras, edges, nodos, componente)
-    entrada = nodo_entrada(flechas, nodos, componente)
+    entrada = nodo_entrada(flechas, nodos, componente, adj=adj)
     if entrada is None:
         return []
     orden = dfs_topologico(entrada, adj, edges)

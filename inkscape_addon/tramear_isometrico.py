@@ -37,7 +37,9 @@ from tramear_core.raster_detector import (
     detectar_costuras_raster,
 )
 from tramear_core.numbering import numerar_costuras, numerar_por_flujo
-from tramear_core.graph_traversal import numerar_por_proximidad
+from tramear_core.graph_traversal import (
+    numerar_por_grafo, numerar_por_proximidad,
+)
 from tramear_core.welding_book import exportar_csv, exportar_xlsx
 
 
@@ -139,16 +141,24 @@ class TramearIsometricoExt(inkex.EffectExtension):
             inkex.errormsg(mensaje)
             return
 
-        # 2. Numeración: si detectamos flecha(s) de sentido de flujo,
-        # numeramos por DFS de proximidad (recorre rama por rama desde
-        # la costura más aguas arriba). Si no, fallback al barrido.
+        # 2. Numeración: intentar primero DFS topológico sobre el grafo
+        # de segmentos (el más fiel al flujo físico de la tubería).
+        # Si falla (sin segmentos, sin flechas), bajar al greedy de
+        # proximidad y por último al barrido por filas.
         flechas = detectar_flechas_flujo(svg)
-        if flechas:
+        segmentos_iso = _extraer_segmentos_lineales(svg)
+        numeradas = []
+        if segmentos_iso:
+            numeradas = numerar_por_grafo(
+                costuras, segmentos_iso, flechas,
+                numero_inicial=self.options.numero_inicial,
+            )
+        if not numeradas and flechas:
             numeradas = numerar_por_proximidad(
                 costuras, flechas,
                 numero_inicial=self.options.numero_inicial,
             )
-        else:
+        if not numeradas:
             numeradas = numerar_costuras(
                 costuras, numero_inicial=self.options.numero_inicial,
             )

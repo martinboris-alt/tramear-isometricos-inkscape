@@ -5,6 +5,37 @@ __pycache__/
 venv/
 *.egg-info/
 .DS_Store
+
+# PDFs originales (demasiado grandes para git)
+0-ISOS 2121/
+
+# Archivos internos del agente AI
+.claude/
+.~lock.*
+
+# Outputs de diagnóstico (generables, no son código)
 revision_10pdfs/fase_c_*
 revision_10pdfs/*_optcall.svg
+revision_10pdfs/*.png
+revision_10pdfs/*_diagnostico_fases/
+revision_10pdfs/*_diagnostico.png
+*_diagnostico_fases/
 diagnostico_fases/
+tools/_artifacts/
+
+# Outputs demo
+demo_*/
+demo_*_marcado.svg
+demo_*_welding_book.csv
+
+# Archivos temporales de revisión
+revision_4pdfs/
+reporte_revision.html
+samples_inventory.csv
+samples_summary.txt
+cd40f09_*.png
+et40_*.png
+et40f04_*.png
+hpn_*.png
+ia91faj_*.png
+verif_*.png

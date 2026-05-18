@@ -757,6 +757,15 @@ def _filtrar_valvulas(costuras: list[Costura], *,
             d = hypot(a.x - b.x, a.y - b.y)
             if d <= radio_busqueda:
                 vecinas_cerca.append((d, b))
+        # Caso 3: T sin ninguna vecina en un radio amplio (3× dist_aislada).
+        # Los FPs en leyenda/soportes están >150pt de cualquier marca real.
+        # Los T reales siempre tienen al menos una marca a ≤100pt (incluso
+        # en isométricos pequeños con 3-4 costuras).
+        radio_muy_aislada = 3.0 * radio_busqueda
+        if not any(hypot(a.x - b.x, a.y - b.y) <= radio_muy_aislada
+                   for j, b in enumerate(costuras) if j != i):
+            descartar.add(i)
+            continue
         # Si solo hay 1 vecina cercana Y es W → conexión bridada
         if len(vecinas_cerca) == 1:
             _, vecina = vecinas_cerca[0]
@@ -765,7 +774,7 @@ def _filtrar_valvulas(costuras: list[Costura], *,
                 continue
         # Si hay MÚLTIPLES vecinas pero NINGUNA es T → tubing aislada
         # rodeada de welds → probable conexión bridada también
-        if vecinas_cerca and not any(b.tipo == "T" for _, b in vecinas_cerca):
+        if not any(b.tipo == "T" for _, b in vecinas_cerca):
             descartar.add(i)
     return [c for idx, c in enumerate(costuras) if idx not in descartar]
 

@@ -1,0 +1,18 @@
+# Dependencias del proyecto.
+#
+# Para las herramientas CLI (tools/):
+#   bash setup_tools.sh
+#   .venv/bin/python -m tools.catalogar_samples
+#
+# Para la extensión de Inkscape: Inkscape trae su propio Python
+# interno. openpyxl/opencv hay que instalarlas en ese Python para que la
+# extensión pueda usarlas (ver install.sh / install.bat).
+
+# Imprescindibles para las tools CLI
+pymupdf>=1.24      # parseo de PDFs vectoriales (objetos, textos, paths)
+openpyxl>=3.1      # export XLSX del welding book
+
+# Opcionales (solo si llegan PDFs escaneados / imágenes embebidas)
+opencv-python>=4.8 ; python_version >= "3.8"
+Pillow>=10.0
+numpy>=1.24

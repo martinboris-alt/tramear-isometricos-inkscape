@@ -47,8 +47,8 @@ from inkex import Circle, PathElement  # noqa: E402
 
 CAPA_COSTURAS = "Costuras"
 DPI_DEF = 200
-OFFSET_MIN_DEF = 25.0    # pt — distancia mínima del callout a la costura
-DIST_MAX_DEF = 80.0      # pt — distancia máxima (ajustado del usuario: 31-74)
+OFFSET_MIN_DEF = 43.4    # pt — validado Fase A (antes 25, demasiado restrictivo)
+DIST_MAX_DEF = 231.4     # pt — validado Fase A (antes 80, espacio insuficiente)
 PADDING_INI = 8.0        # px (≈3 pt @ 200 DPI) — separación deseable al texto
 PADDING_MIN_ABS = 1.0    # px — bajo este valor nos rendimos
 SEP_MIN_CALLOUTS = 25.0  # pt — separación mínima entre callouts (≈ 2× radio)
@@ -187,19 +187,27 @@ def reposicionar_callout(item, dist_map, factor_px,
                          callouts_previos_px: list = None,
                          sep_min_px: float = 0.0,
                          flechas_previas_px: list = None,
+                         costuras_px: list = None,
+                         angulos_vecinos_px: list = None,
+                         outward_dir: tuple = None,
                          ) -> tuple[float, float, float]:
     """Encuentra la mejor posición para el callout y devuelve
     (cx_nuevo, cy_nuevo, dist_lograda_px). dist_lograda_px puede ser
     menor que padding_min_px si no hay sitio.
 
-    `callouts_previos_px`: lista de (cx, cy) en píxeles de callouts ya
-    colocados. Si está dada, los candidatos a < `sep_min_px` se rechazan.
-    Esto evita amontonamiento en la misma zona libre.
+    `callouts_previos_px`: lista de (cx, cy) en px de callouts ya colocados.
+    `angulos_vecinos_px`:  lista de (wx, wy, ang_rad) para callouts de
+      costuras CERCANAS ya colocadas — el candidato actual no puede ir en
+      una dirección a menos de ANG_EXCL radianes de esos ángulos.
     """
     if callouts_previos_px is None:
         callouts_previos_px = []
     if flechas_previas_px is None:
         flechas_previas_px = []
+    if costuras_px is None:
+        costuras_px = []
+    if angulos_vecinos_px is None:
+        angulos_vecinos_px = []
     x_cost = item["x_cost"]
     y_cost = item["y_cost"]
     xc_cost_px = x_cost * factor_px
@@ -236,6 +244,20 @@ def reposicionar_callout(item, dist_map, factor_px,
             if any((x - px) ** 2 + (y - py) ** 2 < sep_min_px ** 2
                    for px, py in callouts_previos_px):
                 continue
+            # Hard-reject: si la flecha cruza alguna flecha vecina CERCANA
+            # (costuras a < 3×r_call). Para welds muy juntos la penalización
+            # no es suficiente — hay que rechazar directamente.
+            cruce_duro = False
+            for i_f, (ax1, ay1, ax2, ay2) in enumerate(flechas_previas_px):
+                wx_f, wy_f = ax2, ay2  # extremo = posición de esa costura
+                dist_welds = math.hypot(wx_f - xc_cost_px, wy_f - yc_cost_px)
+                if dist_welds < r_call_px * 3.0:
+                    if _segmentos_se_cruzan(x, y, xc_cost_px, yc_cost_px,
+                                            ax1, ay1, ax2, ay2):
+                        cruce_duro = True
+                        break
+            if cruce_duro:
+                continue
             # Penalizar candidatos cuya flecha cruzaría O pasaría muy
             # cerca (≤sep_min_px) de flechas previas. La proximidad
             # captura el caso "pisando la línea" sin cruce geométrico.
@@ -247,23 +269,54 @@ def reposicionar_callout(item, dist_map, factor_px,
                 )
                 if d_seg < sep_min_px * 0.5:  # ≈12pt
                     cruces += 1
+            # Penalizar cuando la flecha pasa cerca del círculo de OTRA
+            # costura (no la propia). Radio de exclusión = 2×radio_callout.
+            excl_px = r_call_px * 2.0
+            for (cx_o, cy_o) in costuras_px:
+                if math.hypot(cx_o - xc_cost_px, cy_o - yc_cost_px) < 0.5:
+                    continue  # es la propia costura
+                d_cost = _punto_a_seg(cx_o, cy_o, x, y, xc_cost_px, yc_cost_px)
+                if d_cost < excl_px:
+                    cruces += 1
+            # Penalización angular suave: preferir que callouts de costuras
+            # cercanas apunten en direcciones distintas (±ANG_EXCL).
+            # No es hard-reject: si el callout está lo suficientemente lejos
+            # del anterior (sep_min ya garantiza eso), puede ir en el mismo
+            # sector siempre que no haya cruce de líneas.
+            ANG_EXCL = math.radians(50)
+            ang_cand = math.atan2(y - yc_px, x - xc_px)
+            for (wx_v, wy_v, ang_v) in angulos_vecinos_px:
+                diff = abs(ang_cand - ang_v)
+                diff = min(diff, 2 * math.pi - diff)
+                if diff < ANG_EXCL:
+                    cruces += 1
             sub = dist_map[iy - r_int:iy + r_int + 1,
                            ix - r_int:ix + r_int + 1]
             if sub.size == 0:
                 continue
             dist_min = float(sub.min())
             # Score: priorizar (1) cumplir padding, (2) cercanía a costura,
-            # (3) ligero peso a distancia al texto. El usuario coloca
-            # callouts CERCA de la costura, no en el "máximo absoluto libre".
+            # (3) dirección outward del cluster, (4) distancia al texto.
             penal_dist = d / dmax_px  # 0..1, mayor = más lejos
             penal_cruce = 2.0 * cruces  # cada cruce/proximidad penaliza fuerte
+            # Bonus outward: preferir que el callout salga "hacia afuera"
+            # del cluster (desde el centroide hacia la costura). Evita que
+            # las flechas se crucen el centro del cluster.
+            bonus_outward = 0.0
+            if outward_dir is not None:
+                ox, oy = outward_dir
+                cand_nx = (x - xc_px) / (d or 1.0)
+                cand_ny = (y - yc_px) / (d or 1.0)
+                dot_out = cand_nx * ox + cand_ny * oy
+                bonus_outward = 2.0 * dot_out  # fuerte: -2.0 a +2.0
             if dist_min >= padding_min_px:
                 score = (-penal_dist
                           + 0.1 * (dist_min / max(padding_min_px, 1))
+                          + bonus_outward
                           - penal_cruce)
             else:
                 score = (-1.0 + dist_min / max(padding_min_px, 1)
-                          - penal_dist - penal_cruce)
+                          - penal_dist + bonus_outward - penal_cruce)
             if score > mejor_score:
                 mejor_score = score
                 mejor = (x, y, dist_min)
@@ -362,6 +415,10 @@ def main() -> None:
     items = extraer_callouts_y_costuras(capa)
     print(f"  callouts a reposicionar: {len(items)}")
 
+    # Lista de posiciones de costuras en px (para evitar que flechas las crucen)
+    todas_costuras_px = [(it["x_cost"] * factor_px, it["y_cost"] * factor_px)
+                         for it in items]
+
     # Padding adaptativo: empezar con padding_ini, bajar si <70% cumplen.
     sep_px = SEP_MIN_CALLOUTS * factor_px
     padding_px = args.padding_px
@@ -372,13 +429,51 @@ def main() -> None:
         propuesta = []
         previos_px = []     # (cx, cy) en px de callouts ya colocados
         flechas_px = []     # (x1, y1, x2, y2) en px de flechas ya trazadas
+        # (wx, wy, ang) de callouts ya colocados — para exclusión angular
+        angulos_px: list[tuple[float, float, float]] = []
+        # Radio de vecindad para exclusión angular: ~3× sep_min
+        vecindad_ang_px = sep_px * 3.0
         for it in items:
+            wx_i = it["x_cost"] * factor_px
+            wy_i = it["y_cost"] * factor_px
+            # Solo pasar ángulos de costuras CERCANAS (cluster)
+            ang_vec = [(wx_v, wy_v, ang_v)
+                       for wx_v, wy_v, ang_v in angulos_px
+                       if math.hypot(wx_v - wx_i, wy_v - wy_i) < vecindad_ang_px]
+            # Dirección outward: desde el centroide del cluster hacia esta costura.
+            # Solo si hay ≥2 vecinas MUY CERCANAS (radio = 2×sep_min).
+            # Radio más pequeño que vecindad_ang_px para no incluir costuras
+            # lejanas que sesgarían el centroide.
+            r_cluster_px = sep_px * 2.0
+            vecinas_cluster = [(cx_v / factor_px, cy_v / factor_px)
+                               for cx_v, cy_v in todas_costuras_px
+                               if 0.5 < math.hypot(cx_v - wx_i, cy_v - wy_i) < r_cluster_px]
+            outward_dir = None
+            if len(vecinas_cluster) >= 2:
+                cent_x = sum(p[0] for p in vecinas_cluster) / len(vecinas_cluster)
+                cent_y = sum(p[1] for p in vecinas_cluster) / len(vecinas_cluster)
+                odx = it["x_cost"] - cent_x
+                ody = it["y_cost"] - cent_y
+                odn = math.hypot(odx, ody) or 1.0
+                # Usar solo la componente HORIZONTAL del vector outward:
+                # welds a la izquierda del centroide → callout va a la izquierda,
+                # welds a la derecha → callout va a la derecha.
+                # La componente Y queda libre para que el EDT elija UP/DOWN
+                # según el espacio disponible en el dibujo.
+                if abs(odx) > 0.2 * odn:
+                    outward_dir = (math.copysign(1.0, odx), 0.0)
+                else:
+                    # El weld está casi centrado en X → usar dirección completa
+                    outward_dir = (odx / odn, ody / odn)
             nx, ny, d = reposicionar_callout(
                 it, dist_map, factor_px,
                 args.offset_min, args.dist_max, padding_px,
                 callouts_previos_px=previos_px,
                 sep_min_px=sep_px,
                 flechas_previas_px=flechas_px,
+                costuras_px=todas_costuras_px,
+                angulos_vecinos_px=ang_vec,
+                outward_dir=outward_dir,
             )
             propuesta.append((it, nx, ny, d))
             previos_px.append((nx * factor_px, ny * factor_px))
@@ -387,6 +482,9 @@ def main() -> None:
             flechas_px.append((nx * factor_px, ny * factor_px,
                                 it["x_cost"] * factor_px,
                                 it["y_cost"] * factor_px))
+            ang_placed = math.atan2(ny - it["y_cost"], nx - it["x_cost"])
+            angulos_px.append((wx_i, wy_i, ang_placed))
+
             if d >= padding_px:
                 cumple += 1
         ratio = cumple / max(len(items), 1)
